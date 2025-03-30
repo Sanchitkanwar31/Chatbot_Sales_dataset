@@ -55,6 +55,10 @@ This project is an AI-powered chatbot that allows users to query sales data usin
 - **🤖 AI Generates:** A Pandas query to fetch the required data.
 - **📊 Response:** Displays the total sales for the specified period.
 
+## Summary of Working
+- ![image](https://github.com/user-attachments/assets/5e9041bf-5b14-4c57-a5ff-12914c9f1b8c)
+
+
 ## 🔮 Future Enhancements
 - 🎯 Improve AI accuracy with fine-tuned prompts.
 - 🔒 Add authentication for secure access.
