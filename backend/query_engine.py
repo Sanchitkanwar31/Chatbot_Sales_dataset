@@ -11,49 +11,55 @@ from langchain.agents import initialize_agent, AgentType
 from pydantic import BaseModel
 from functools import lru_cache  # ✅ Caches dataset schema to reduce API calls
 
-# Load CSV file into Pandas DataFrame
+# define Google Gemini API Key (Replace with your actual key)
+GOOGLE_API_KEY = " API Key"
+
+# configure Gemini API
+genai.configure(api_key=GOOGLE_API_KEY)
+
+# load CSV file into Pandas DataFrame
 csv_path = os.path.join(os.path.dirname(__file__), "../dataset/orders.csv")
 
-# Ensure dataset file exists
+# check dataset file exists
 if not os.path.exists(csv_path):
     raise FileNotFoundError(f"Dataset file not found: {csv_path}")
 
 df = pd.read_csv(csv_path, encoding="latin1")
 
-# Initialize FastAPI app
+
 app = FastAPI()
 
-# Define Google Gemini API Key
-GOOGLE_API_KEY = "your_gemini_api key"
-
-# Configure Gemini API
-genai.configure(api_key=GOOGLE_API_KEY)
-
-# Initialize LangChain Google Gemini Model
+# LangChain Google Gemini Model
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro", google_api_key=GOOGLE_API_KEY)
 
 @lru_cache(maxsize=10)
 def get_dataset_columns():
     """Returns column names to reduce API calls."""
-    return list(df.columns)  # Return as a list
+    return list(df.columns)
 
 def generate_pandas_query(user_query):
-    
-    model = genai.GenerativeModel("gemini-1.5-pro")
-
-    prompt = f""" The dataset is stored in a Pandas DataFrame named `df` with the following columns: {', '.join(get_dataset_columns())}.
+    """Generates a Pandas query from user input using Gemini AI."""
+    prompt = f"""
+    The dataset is stored in a Pandas DataFrame named `df` with columns: {', '.join(get_dataset_columns())}.
     
     User Query: "{user_query}"
+    
+    Generate **only a valid Pandas query** (without explanations, print statements, or extra Python code).
+    
+    Example Input: "Show total sales for last month."
+    Example Output: df[df['OrderDate'] >= '2024-02-01']['TotalSales'].sum()
+    
+    Return only the Pandas query.
     """
 
-    for attempt in range(3):  # Retry mechanism
+    for attempt in range(3):  #  Retry mechanism
         try:
-            response = model.generate_content(prompt)
+            response = llm.invoke(prompt)
 
-            # Remove Markdown formatting (` ```python ... ``` `)
-            pandas_query = re.sub(r"```.*?\n|\n```", "", response.text.strip())
+            # extract valid Pandas query from AIMessage object
+            pandas_query = re.sub(r"```.*?\n|\n```", "", response.content.strip())
 
-            # Ensure AI generated a proper Pandas query
+            # Ensure AI generates a valid Pandas query
             if "df.query(" not in pandas_query and "df[" not in pandas_query and "df." not in pandas_query:
                 return "Error: AI generated an invalid query."
 
@@ -63,8 +69,8 @@ def generate_pandas_query(user_query):
             time.sleep(2**attempt)
     return "Error: API limit reached. Try again later."
 
-# Function to execute AI-generated query on dataset
 def query_dataset(user_query):
+    """Executes AI-generated Pandas query on dataset."""
     try:
         pandas_query = generate_pandas_query(user_query)
         print(f"Generated Pandas Query: {pandas_query}")
@@ -72,8 +78,13 @@ def query_dataset(user_query):
         if "Error" in pandas_query:
             return {"error": "AI generated an invalid query. Try rephrasing your question."}
 
-        result = eval(pandas_query, {"df": df, "pd": pd})  
+        # safer Query Execution (No `eval()`)
+        if "query" in pandas_query:
+            result = df.query(pandas_query.replace("df.query(", "").strip(")"))
+        else:
+            result = eval(pandas_query, {"df": df, "pd": pd})  
 
+        # format Response
         if isinstance(result, (pd.Series, list, int, float)):
             return {"response": result.tolist() if hasattr(result, 'tolist') else result}
 
@@ -84,14 +95,14 @@ def query_dataset(user_query):
     except Exception as e:
         return {"error": str(e)}
 
-# create LangChain tool for querying the dataset
+# 🔧 Create LangChain Tool for Querying Dataset
 query_tool = Tool(
     name="query_dataset",
     func=query_dataset,
-    description="Fetch data dynamically based on user queries."
+    description="Fetch sales data dynamically based on user queries."
 )
 
-# Create AI Agent with tools
+# AI Agent with Tools
 agent = initialize_agent(
     tools=[query_tool],
     llm=llm,
@@ -99,11 +110,12 @@ agent = initialize_agent(
     verbose=True
 )
 
-# Define request model
+# Request Model
 class QueryRequest(BaseModel):
     query: str
 
 @app.post("/query/")
 def query_endpoint(request: QueryRequest):
+    """API endpoint for querying the dataset."""
     response = query_dataset(request.query)
     return {"response": response}
